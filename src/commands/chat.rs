@@ -1,121 +1,68 @@
 use crate::storage::db;
-use crate::storage::models::{Conversation, Message};
-use rusqlite::Connection;
-use std::sync::Mutex;
+use crate::storage::models::{Conversation, Message, MessageRole};
 use tauri::State;
+use std::sync::Mutex;
+use chrono::Utc;
 
-pub struct DbState(pub Mutex<Connection>);
+pub struct DbState(pub Mutex<rusqlite::Connection>);
 
 #[tauri::command]
-pub async fn get_conversations(db: State<'_, DbState>) -> Result<Vec<Conversation>, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, title, model_id, created_at, updated_at, is_starred, tags FROM conversations ORDER BY updated_at DESC")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(Conversation {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                model_id: row.get(2)?,
-                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
-                    .unwrap()
-                    .with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
-                    .unwrap()
-                    .with_timezone(&chrono::Utc),
-                is_starred: row.get::<_, i32>(5)? != 0,
-                tags: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    let mut conversations = Vec::new();
-    for row in rows {
-        conversations.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(conversations)
+pub async fn get_conversations(state: State<'_, DbState>) -> Result<Vec<Conversation>, String> {
+    let conn = state.0.lock().unwrap();
+    db::get_conversations(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn get_messages(
-    db: State<'_, DbState>,
-    conv_id: i64,
-) -> Result<Vec<Message>, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, conversation_id, role, content, model_id, latency_ms, token_usage, created_at FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([conv_id], |row| {
-            Ok(Message {
-                id: row.get(0)?,
-                conversation_id: row.get(1)?,
-                role: row.get(2)?,
-                content: row.get(3)?,
-                model_id: row.get(4)?,
-                latency_ms: row.get(5)?,
-                token_usage: row.get(6)?,
-                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
-                    .unwrap()
-                    .with_timezone(&chrono::Utc),
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    let mut messages = Vec::new();
-    for row in rows {
-        messages.push(row.map_err(|e| e.to_string())?);
-    }
-    Ok(messages)
+pub async fn get_messages(state: State<'_, DbState>, conv_id: i64) -> Result<Vec<Message>, String> {
+    let conn = state.0.lock().unwrap();
+    db::get_messages(&conn, conv_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn new_conversation(
-    db: State<'_, DbState>,
-    title: String,
-    model_id: String,
-) -> Result<Conversation, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO conversations (title, model_id) VALUES (?1, ?2)",
-        rusqlite::params![title, model_id],
-    )
-    .map_err(|e| e.to_string())?;
-    let id = conn.last_insert_rowid();
-    Ok(Conversation {
-        id,
+pub async fn new_conversation(state: State<'_, DbState>, title: String, model_id: String) -> Result<Conversation, String> {
+    let conn = state.0.lock().unwrap();
+    let conv = Conversation {
+        id: 0,
         title,
         model_id,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
         is_starred: false,
         tags: vec![],
-    })
+        system_prompt: None,
+    };
+    db::insert_conversation(&conn, &conv).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn send_message(
-    db: State<'_, DbState>,
-    conv_id: i64,
-    content: String,
-) -> Result<Message, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?1, 'user', ?2, ?3)",
-        rusqlite::params![conv_id, content, now],
-    )
-    .map_err(|e| e.to_string())?;
-    let msg_id = conn.last_insert_rowid();
-    Ok(Message {
-        id: msg_id,
+pub async fn send_message(state: State<'_, DbState>, conv_id: i64, content: String) -> Result<Message, String> {
+    // 保存用户消息
+    let user_msg = Message {
+        id: 0,
         conversation_id: conv_id,
-        role: "user".into(),
-        content,
+        role: MessageRole::User,
+        content: content.clone(),
         model_id: None,
         latency_ms: None,
         token_usage: None,
-        created_at: chrono::Utc::now(),
-    })
-}
+        created_at: Utc::now(),
+        is_liked: None,
+    };
+    let conn = state.0.lock().unwrap();
+    db::insert_message(&conn, &user_msg).map_err(|e| e.to_string())?;
 
-// 后续可在升级版本中加入真正的AI回复插入逻辑
+    // 模拟 AI 回复（避免网络和复杂依赖）
+    let reply = format!("你发送了: {}\n（这是模拟回复，正式版会接入真实模型）", content);
+    let assistant_msg = Message {
+        id: 0,
+        conversation_id: conv_id,
+        role: MessageRole::Assistant,
+        content: reply,
+        model_id: Some("模拟模型".to_string()),
+        latency_ms: Some(0),
+        token_usage: None,
+        created_at: Utc::now(),
+        is_liked: None,
+    };
+    db::insert_message(&conn, &assistant_msg).map_err(|e| e.to_string())
+}
