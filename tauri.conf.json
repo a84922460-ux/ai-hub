@@ -1,0 +1,29 @@
+{
+  "productName": "大模型自由集市",
+  "version": "0.1.0",
+  "identifier": "com.aihub.app",
+  "build": {
+    "frontendDist": "./frontend/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "cd frontend && npm install && npm run dev"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "大模型自由集市",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {}
+}
