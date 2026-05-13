@@ -8,7 +8,6 @@ mod utils;
 
 use commands::chat::DbState;
 use std::sync::Mutex;
-use tauri::Manager;
 
 pub fn run() {
     let app_dir = dirs_next::data_dir()
