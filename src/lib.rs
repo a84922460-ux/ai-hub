@@ -1,10 +1,12 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod adapters;
-mod commands;
+// mod router;      // 暂时注释，解决 dyn trait 问题
 mod learning;
-mod router;
 mod storage;
 mod upgrade;
 mod utils;
+mod commands;
 
 use commands::chat::DbState;
 use std::sync::Mutex;
